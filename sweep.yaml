@@ -1,0 +1,19 @@
+program: run_ppo_plus.py
+method: grid
+project: spo_ppo_off
+name: ppo_spo_mujoco_grid
+
+command:
+  - ${env}                 
+  - python
+  - ${program}
+  - ${args}
+
+
+parameters:
+  algo:
+    values: [ppo, spo]             
+  seed:
+    values: [0, 1, 2, 3, 4]
+  env_name: 
+    values: [Humanoid-v5]  
