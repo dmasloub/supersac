@@ -36,7 +36,7 @@ from dm_control import suite
 
 
 # Set env variables
-os.environ["WANDB_API_KEY"]="28996bd59f1ba2c5a8c3f2cc23d8673c327ae230"
+os.environ["WANDB_API_KEY"]="7a792f0991f824c320035120180ba48920981e67"
 os.environ["WANDB__SERVICE_WAIT"] = str(1800)
 os.environ['PYTHONHASHSEED'] = '1'
 os.environ['TF_CUDNN_DETERMINISTIC'] = '1'
@@ -51,12 +51,14 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--seed',type=int,default=42) 
 
 parser.add_argument('--algo_name', type=str, default='superppo', help='the name of the RL algorithm')
+parser.add_argument('--algo', type=str, default="ppo")
 parser.add_argument('--project_name',type=str,default="single_exp_off") 
 parser.add_argument('--env_name',type=str,default="Humanoid-v5") 
 parser.add_argument('--max_steps',type=int,default=1_000_000) 
 parser.add_argument('--max_episode_steps',type=int,default=1000) 
 parser.add_argument('--gamma',type=float,default=0.99)
 parser.add_argument('--entropy_coeff',type=float,default=1.) 
+parser.add_argument('--spo_epsilon',type=float, default=0.2)
 
 parser.add_argument('--num_critics',type=int,default=5)
 parser.add_argument('--hidden_dims',type=int,default=256) 
@@ -124,7 +126,7 @@ def train(args):
 
     wandb_config = {
         'project': args.project_name,
-        'name':None,
+        'name': f"{args.algo}_{args.env_name}_{args.seed}",
         'hyperparam_dict':args.__dict__,
         }
     wandb_run = setup_wandb(**wandb_config)
@@ -160,6 +162,7 @@ def train(args):
 
     agent = create_learner(args.seed,
                         
+                    algo=args.algo,    
                     observations=example_transition['observations'][None],
                     actions =example_transition['actions'][None],
                     max_steps=max_steps,
@@ -170,6 +173,7 @@ def train(args):
                     adaptive_critics=args.adaptive_critics,
                     num_critics= args.num_critics,
                     entropy_coeff=args.entropy_coeff,
+                    spo_epsilon=args.spo_epsilon,
                     temperature=args.temperature,
                     actor_lr=args.actor_lr,
                     critic_lr=args.critic_lr,

@@ -182,31 +182,43 @@ class SACAgent(flax.struct.PyTreeNode):
             
             # Apply tanh squashing correction if needed
             if agent.config["tanh_squash_actions"]:
-                new_logp = pre_log_probs - jnp.sum(2 * (jnp.log(2) + pre_actions - jax.nn.softplus(2 * pre_actions)), axis=-1)
+                new_logp = pre_log_probs - jnp.sum(2 * (jnp.log(2) - pre_actions - jax.nn.softplus(-2 * pre_actions)), axis=-1)
             else:
                 new_logp = pre_log_probs
             
             # Calculate importance sampling ratio
             logratio = new_logp - logp
             ratio = jnp.exp(logratio)
-
-            # Calculate approximate KL divergence for monitoring
-            approx_kl = ((ratio - 1) - logratio).mean()
-
-            # PPO clipped objective
-            clip_coef = agent.config["clipping_ratio"]
             
-            actor_loss1 = masks * adv * ratio
-            actor_loss2 = masks * adv * jnp.clip(ratio, 1 - clip_coef, 1 + clip_coef)
+            if agent.config["algo"] == "ppo":
 
-            # Apply discounting if configured
-            if agent.config['discount_actor']:
-                actor_loss = -jnp.minimum(discounts * actor_loss1, discounts * actor_loss2).sum() / (discounts.sum())
-            else:
-                actor_loss = -jnp.minimum(actor_loss1, actor_loss2).mean()
+                # PPO clipped objective
+                clip_coef = agent.config["clipping_ratio"]
+            
+                actor_loss1 = masks * adv * ratio
+                actor_loss2 = masks * adv * jnp.clip(ratio, 1 - clip_coef, 1 + clip_coef)
+
+                # Apply discounting if configured
+                if agent.config['discount_actor']:
+                    actor_loss = -jnp.minimum(discounts * actor_loss1, discounts * actor_loss2).sum() / (discounts.sum())
+                else:
+                    actor_loss = -jnp.minimum(actor_loss1, actor_loss2).mean()
                 
+            elif agent.config["algo"] == "spo": 
+                    eps = agent.config["spo_epsilon"]          
+                    spo_term = ratio * adv - (jnp.abs(adv) / (2 * eps)) * (ratio - 1.0) ** 2
+
+                    if agent.config["discount_actor"]:
+                        actor_loss = -(discounts * masks * spo_term).sum() / discounts.sum()
+                    else:
+                        actor_loss = -(masks * spo_term).mean()
+                        
+            
             # Calculate entropy
             logp = masks * new_logp
+            
+            # Calculate approximate KL divergence for monitoring
+            approx_kl = ((ratio - 1) - logratio).mean()
             
             if agent.config['discount_entropy']:
                 entropy = -1 * (discounts * logp).sum() / (discounts.sum())
@@ -356,6 +368,7 @@ class SACAgent(flax.struct.PyTreeNode):
 
 def create_learner(
                 seed: int,
+                algo: str, 
                 observations: jnp.ndarray,
                 actions: jnp.ndarray,
                 discount: float,
@@ -365,6 +378,7 @@ def create_learner(
                 discount_entropy,
                 adaptive_critics,
                 entropy_coeff,
+                spo_epsilon,
                 momentum,
                 b2,
                 actor_lr,
@@ -429,6 +443,7 @@ def create_learner(
             target_entropy = -entropy_coeff*action_dim
 
         config = flax.core.FrozenDict(dict(
+            algo=algo,
             discount=discount,
             target_entropy=target_entropy,
             observations=observations,
@@ -439,6 +454,7 @@ def create_learner(
             adaptive_critics = adaptive_critics,
             num_actor_updates = num_actor_updates,
             clipping_ratio = clipping_ratio,
+            spo_epsilon=spo_epsilon,
             min_target = min_target,
             tanh_squash_actions=tanh_squash_actions,
             gae_lambda=gae_lambda,
