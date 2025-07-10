@@ -1,0 +1,16 @@
+program: run_ppo_plus.py
+method: grid
+project: spovppo
+name: spovppo_walker
+
+command: 
+  - ${env}
+  - python
+  - ${program}
+  - ${args}
+
+parameters: 
+  algo: 
+    values: [spo, ppo]
+  seed: 
+    values: [0,1,2,3,4]

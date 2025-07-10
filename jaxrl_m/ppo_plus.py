@@ -188,18 +188,28 @@ class SACAgent(flax.struct.PyTreeNode):
 
             # Calculate how much policy is changing
             approx_kl = ((ratio - 1) - logratio).mean()
-
-            # Policy loss
-            clip_coef = agent.config["clipping_ratio"] ##default 0.2 
             
-            actor_loss1 = masks*adv * ratio
-            actor_loss2 = masks*adv * jnp.clip(ratio, 1 - clip_coef, 1 + clip_coef)
+            if agent.config["algo"] == "ppo":
 
-            if agent.config['discount_actor']:
-                #jax.debug.print("🤯 HELLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL{x} 🤯", x=discounts[:100])
-                actor_loss = -jnp.minimum(discounts*actor_loss1,discounts*actor_loss2).sum()/(discounts.sum())
-            else : 
-                actor_loss = -jnp.minimum(actor_loss1,actor_loss2).mean()
+                # Policy loss
+                clip_coef = agent.config["clipping_ratio"] ##default 0.2 
+            
+                actor_loss1 = masks*adv * ratio
+                actor_loss2 = masks*adv * jnp.clip(ratio, 1 - clip_coef, 1 + clip_coef)
+
+                if agent.config['discount_actor']:
+                    #jax.debug.print("🤯 HELLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL{x} 🤯", x=discounts[:100])
+                    actor_loss = -jnp.minimum(discounts*actor_loss1,discounts*actor_loss2).sum()/(discounts.sum())
+                else : 
+                    actor_loss = -jnp.minimum(actor_loss1,actor_loss2).mean()
+            elif agent.config["algo"] == "spo": 
+                eps = agent.config["spo_epsilon"]
+                spo_term = ratio * adv - (jnp.abs(adv) / (2 * eps)) * (ratio - 1.0) ** 2
+                
+                if agent.config['discount_actor']: 
+                    actor_loss = -(discounts * masks * spo_term).sum() / discounts.sum()
+                else: 
+                    actor_loss = -(masks * spo_term).mean()
                 
             ### Pad Q and logits because actor buffer is padded ###
             logp = masks * new_logp
@@ -212,7 +222,11 @@ class SACAgent(flax.struct.PyTreeNode):
             return actor_loss, {
                 'actor_loss': actor_loss,
                 'entropy': entropy,
-                'approx_kl':approx_kl
+                'approx_kl':approx_kl, 
+                'max_ratio':jnp.max(ratio),
+                'min_ratio':jnp.min(ratio),
+                'mean_ratio':jnp.mean(ratio),
+                'std_ratio':jnp.std(ratio),
             }
             
         
@@ -352,6 +366,7 @@ class SACAgent(flax.struct.PyTreeNode):
 
 def create_learner(
                 seed: int,
+                algo: str, 
                 observations: jnp.ndarray,
                 actions: jnp.ndarray,
                 discount: float,
@@ -361,6 +376,7 @@ def create_learner(
                 discount_entropy,
                 adaptive_critics,
                 entropy_coeff,
+                spo_epsilon,
                 momentum,
                 b2,
                 actor_lr,
@@ -425,6 +441,7 @@ def create_learner(
             target_entropy = -entropy_coeff*action_dim
 
         config = flax.core.FrozenDict(dict(
+            algo=algo,
             discount=discount,
             target_entropy=target_entropy,
             observations=observations,
@@ -435,6 +452,7 @@ def create_learner(
             adaptive_critics = adaptive_critics,
             num_actor_updates = num_actor_updates,
             clipping_ratio = clipping_ratio,
+            spo_epsilon = spo_epsilon,
             min_target = min_target,
             tanh_squash_actions=tanh_squash_actions,
             gae_lambda=gae_lambda,
