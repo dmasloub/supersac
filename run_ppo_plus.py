@@ -51,7 +51,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--seed',type=int,default=0) 
 
 parser.add_argument('--algo_name', type=str, default='superppo', help='the name of the RL algorithm')
-parser.add_argument('--algo', type=str, default="ppo")
+parser.add_argument('--algo', type=str, default="spo")
 parser.add_argument('--project_name',type=str,default="spovppo") 
 parser.add_argument('--env_name',type=str,default="Humanoid-v5") 
 parser.add_argument('--max_steps',type=int,default=1_000_000) 
@@ -75,6 +75,7 @@ parser.add_argument('--on_policy_data',type=str2bool,default=False)
 parser.add_argument('--adaptive_critics',type=str2bool,default=False) 
 parser.add_argument('--min_target',type=str2bool,default=False)
 parser.add_argument('--use_layer_norm',type=str2bool,default=True)
+parser.add_argument('--layers', type=int, default=7)
 
 parser.add_argument('--clipping_ratio',type=float,default=0.25) 
 parser.add_argument('--gae_lambda',type=float,default=0.5) 
@@ -175,8 +176,8 @@ def train(args):
                     b2=args.b2,
                     clipping_ratio=args.clipping_ratio,
                     num_actor_updates=args.num_actor_updates,
-                    actor_hidden_dims=(args.hidden_dims,args.hidden_dims),
-                    critic_hidden_dims=(args.hidden_dims,args.hidden_dims),
+                    actor_hidden_dims=(args.hidden_dims,)*args.layers ,
+                    critic_hidden_dims=(args.hidden_dims,)*args.layers ,
                     use_layer_norm= args.use_layer_norm,
                     gae_lambda=args.gae_lambda,
                     minibatch = args.minibatch,
