@@ -189,7 +189,9 @@ class SACAgent(flax.struct.PyTreeNode):
             # Calculate importance sampling ratio
             logratio = new_logp - logp
             ratio = jnp.exp(logratio)
-            
+            # Calculate approximate KL divergence for monitoring
+            approx_kl = ((ratio - 1) - logratio).mean()
+
             if agent.config["algo"] == "ppo":
 
                 # PPO clipped objective
@@ -205,20 +207,43 @@ class SACAgent(flax.struct.PyTreeNode):
                     actor_loss = -jnp.minimum(actor_loss1, actor_loss2).mean()
                 
             elif agent.config["algo"] == "spo": 
-                    eps = agent.config["spo_epsilon"]          
-                    spo_term = ratio * adv - (jnp.abs(adv) / (2 * eps)) * (ratio - 1.0) ** 2
+                eps = agent.config["spo_epsilon"]          
+                spo_term = ratio * adv - (jnp.abs(adv) / (2 * eps)) * (ratio - 1.0) ** 2
 
-                    if agent.config["discount_actor"]:
-                        actor_loss = -(discounts * masks * spo_term).sum() / discounts.sum()
-                    else:
-                        actor_loss = -(masks * spo_term).mean()
-                        
+                if agent.config["discount_actor"]:
+                    actor_loss = -(discounts * masks * spo_term).sum() / discounts.sum()
+                else:
+                    actor_loss = -(masks * spo_term).mean()
+            elif agent.config["algo"] == "t_ppo":
+                slope_rollback = -0.3
+                clip_coef = agent.config["clipping_ratio"]
+
+                pg_targets = jnp.where(
+                    adv >= 0,
+                    jnp.where( ratio <= 1 + clip_coef,
+                                    ratio,
+                                    slope_rollback * ratio + (1 - slope_rollback) * (1 + clip_coef) ),
+                    jnp.where( ratio >= 1 - clip_coef,
+                                    ratio,
+                                    slope_rollback * ratio + (1 - slope_rollback) * (1 - clip_coef))
+                ) * adv
+
+                # KLRANGE = 0.03
+                # rollback_ratio = jnp.where(
+                #     jnp.logical_and( approx_kl >= KLRANGE, ratio * adv > 1 * adv),
+                #     alpha * approx_kl * jnp.abs(adv),
+                #     ratio * adv
+                # )
+
+                if agent.config["discount_actor"]:
+                    actor_loss = -(discounts * masks * pg_targets).sum() / discounts.sum()
+                else:
+                    actor_loss = -(masks * pg_targets).mean()
+                                    
             
             # Calculate entropy
             logp = masks * new_logp
             
-            # Calculate approximate KL divergence for monitoring
-            approx_kl = ((ratio - 1) - logratio).mean()
             
             if agent.config['discount_entropy']:
                 entropy = -1 * (discounts * logp).sum() / (discounts.sum())
