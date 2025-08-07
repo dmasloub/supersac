@@ -1,16 +1,18 @@
-program: run_ppo_plus.py
+program: run.sh
 method: grid
-project: spovppo
-name: spovppo_walker
+entity: azelik-tu-darmstadt
+project: single_exp_off
+name: ppo_spo_mujoco_grid
 
-command: 
-  - ${env}
-  - python
+command:
+  - ${env}                 
+  - bash
   - ${program}
   - ${args}
 
-parameters: 
-  algo: 
-    values: [spo, ppo]
-  seed: 
-    values: [0,1,2,3,4]
+
+parameters:
+  algo:
+    values: [t_ppo, ppo, spo]             
+  env_name: 
+    values: [Humanoid-v5]   # , Ant-v5

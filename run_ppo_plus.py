@@ -36,7 +36,7 @@ from dm_control import suite
 
 
 # Set env variables
-os.environ["WANDB_API_KEY"]="7a792f0991f824c320035120180ba48920981e67"
+os.environ["WANDB_API_KEY"]="f9540294027a23e50c7baca093b39d876b433d87"
 os.environ["WANDB__SERVICE_WAIT"] = str(1800)
 os.environ['PYTHONHASHSEED'] = '1'
 os.environ['TF_CUDNN_DETERMINISTIC'] = '1'
@@ -51,10 +51,10 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--seed',type=int,default=0) 
 
 parser.add_argument('--algo_name', type=str, default='superppo', help='the name of the RL algorithm')
-parser.add_argument('--algo', type=str, default="ppo")
-parser.add_argument('--project_name',type=str,default="spovppo") 
-parser.add_argument('--env_name',type=str,default="Humanoid-v5") 
-parser.add_argument('--max_steps',type=int,default=1_000_000) 
+parser.add_argument('--algo', type=str, default="p3o")
+parser.add_argument('--project_name',type=str,default="single_exp") 
+parser.add_argument('--env_name',type=str,default="Ant-v5") # Walker2d-v5
+parser.add_argument('--max_steps',type=int,default=4_000_000) 
 parser.add_argument('--max_episode_steps',type=int,default=1000) 
 parser.add_argument('--gamma',type=float,default=0.99)
 parser.add_argument('--entropy_coeff',type=float,default=1.)
@@ -110,7 +110,7 @@ def train(args):
     
     
         
-    if args.env_name in ["Humanoid-v5","HumanoidStandup-v5","walk","stand","trot","run"]: args.max_steps = 5_000_000
+    if args.env_name in ["Humanoid-v5","HumanoidStandup-v5","walk","stand","trot","run"]: args.max_steps = 4_000_000
     elif args.env_name == "InvertedDoublePendulum-v5": args.max_steps = 500_000
     if args.on_policy_data: args.buffer_size = args.policy_steps
     
@@ -121,6 +121,7 @@ def train(args):
     wandb_config = {
         'project': args.project_name,
         'name': f"{args.algo}_{args.env_name}_{args.seed}",
+        'entity': "supersac",
         'hyperparam_dict':args.__dict__,
         }
     wandb_run = setup_wandb(**wandb_config)
@@ -224,7 +225,13 @@ def train(args):
                     ### Update actor ###
                     actor_batch = actor_buffer.get_all()    
                     
-                    agent, actor_update_info = agent.update_actor(actor_batch)    
+                    if args.algo == "p3o":
+                        off_policy_batch = replay_buffer.sample(jax.random.PRNGKey(i), 1024) # faster than get_all()
+
+                        jax.debug.breakpoint()
+                        agent, actor_update_info = agent.update_actor(actor_batch, off_policy_batch)
+                    else:
+                        agent, actor_update_info = agent.update_actor(actor_batch)    
                     critic_update_info = {}
                 
                 update_info = {**critic_update_info, **actor_update_info}
