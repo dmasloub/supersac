@@ -230,35 +230,64 @@ class SACAgent(flax.struct.PyTreeNode):
                     on_loss = -(discounts * masks * spo_term).sum() / discounts.sum()
                 else:
                     on_loss = -(masks * spo_term).mean()
+                # -----------------------------------------
 
-                # Off-policy correction (P3O)
-                off_dist = agent.actor(off_policy_batch["observations"], params=actor_params)
-                off_logp = off_dist.log_prob(off_policy_batch["pre_actions"])
+                # Off-policy P3O loss
+                # off_dist = agent.actor(off_policy_batch["observations"], params=actor_params)
+                # off_logp = off_dist.log_prob(off_policy_batch["pre_actions"])
 
+                # if agent.config["tanh_squash_actions"]:
+                #     off_logp -= jnp.sum(
+                #         2 * (jnp.log(2) - off_policy_batch["pre_actions"] - jax.nn.softplus(-2 * off_policy_batch["pre_actions"])),
+                #         axis=-1
+                #     )
+
+                # log_ratios = off_logp - off_policy_batch["log_probs"]
+                # ratios = jnp.exp(log_ratios)
+
+                # # ESS-based clipping
+                # c = compute_ess(log_ratios)
+                # lambda_ = 1. - c
+                # clipped_ratios = jnp.minimum(ratios, c)
+
+                # off_adv = off_policy_batch["advantages"]
+                # off_masks = off_policy_batch["masks"]
+                # off_loss = -(clipped_ratios * off_adv * off_masks).mean()
+
+                # # KL divergence between β and π
+                # kl_div = (ratios * log_ratios).mean()
+                # kl_term = lambda_ * kl_div
+
+                # # Final combined loss
+                # actor_loss = on_loss + off_loss + kl_term
+                opb = jax.tree.map(lambda x: x[idx], off_policy_batch)
+
+                off_dist = agent.actor(opb["observations"], params=actor_params)
+                off_logp = off_dist.log_prob(opb["pre_actions"])
                 if agent.config["tanh_squash_actions"]:
-                    off_logp -= jnp.sum(
-                        2 * (jnp.log(2) - off_policy_batch["pre_actions"] - jax.nn.softplus(-2 * off_policy_batch["pre_actions"])),
-                        axis=-1
-                    )
+                    off_logp -= jnp.sum(2 * (jnp.log(2) - opb["pre_actions"] - jax.nn.softplus(-2 * opb["pre_actions"])), axis=-1)
 
-                log_ratios = off_logp - off_policy_batch["log_probs"]
-                ratios = jnp.exp(log_ratios)
+                # behavior logs from buffer (same actions)
+                b_logp = opb["log_probs"]
 
-                # ESS-based clipping
-                c = compute_ess(log_ratios)
-                lambda_ = 1. - c
-                clipped_ratios = jnp.minimum(ratios, c)
+                # (2) IS ratios and ESS
+                log_ratios = off_logp - b_logp            # log(π/β)
+                c = compute_ess(log_ratios)               # in [eps, 1]
+                lambda_ = 1.0 - c
 
-                off_adv = off_policy_batch["advantages"]
-                off_masks = off_policy_batch["masks"]
-                off_loss = -(clipped_ratios * off_adv * off_masks).mean()
+                w = jax.lax.stop_gradient(jnp.exp(log_ratios))
+                rho = jnp.clip(w, 0.0, c)
 
-                # KL divergence between β and π
-                kl_div = (ratios * log_ratios).mean()
-                kl_term = lambda_ * kl_div
+                # (3) off-policy advantages (no grad)
+                off_adv = jax.lax.stop_gradient(opb["advantages"])
+                off_masks = opb["masks"]
 
-                # Final combined loss
-                actor_loss = on_loss + off_loss + kl_term
+                off_loss = -jnp.mean(rho * off_adv * off_masks)
+
+                # (4) KL(β || π)
+                kl_beta_pi = jnp.mean(b_logp - off_logp)  # E_β[log β - log π]
+
+                actor_loss = on_loss + off_loss + lambda_ * kl_beta_pi
             else:
                 raise ValueError(f"Unknown algo: {agent.config['algo']}")
 

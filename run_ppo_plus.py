@@ -223,8 +223,11 @@ def train(args):
                     actor_batch = actor_buffer.get_all()    
                     
                     if args.algo == "p3o":
-                        off_policy_batch = replay_buffer.get_all() # TODO: consider the sample size
-                        agent, actor_update_info = agent.update_actor(actor_batch, off_policy_batch)
+                        # off_policy_batch = replay_buffer.get_all() # TODO: consider the sample size
+                        rb_full = replay_buffer.get_all()
+                        off_bs = min(8192, rb_full["observations"].shape[0])  # or 4096 if you’re tight on VRAM
+                        off_policy_subset = replay_buffer.sample(off_bs) 
+                        agent, actor_update_info = agent.update_actor(actor_batch, off_policy_subset)
                     else:
                         agent, actor_update_info = agent.update_actor(actor_batch)    
                     critic_update_info = {}
@@ -235,9 +238,9 @@ def train(args):
                 exploration_metrics = {f'exploration/disc_return': policy_return}
                 train_metrics = {f'training/{k}': v for k, v in update_info.items()}
                 train_metrics['training/undisc_return'] = undisc_policy_return
-                
-                wandb.log(train_metrics, step=int(i),commit=False)
-                wandb.log(exploration_metrics, step=int(i),commit=False)
+                if not args.debug_mode:
+                    wandb.log(train_metrics, step=int(i),commit=False)
+                    wandb.log(exploration_metrics, step=int(i),commit=False)
             
                 ### Log evaluation info ###
                 
@@ -254,10 +257,12 @@ def train(args):
                     eval_metrics['n_grads']=int(n_grads)
 
                     eval_step = i
-                    wandb.log(eval_metrics, step=int(eval_step),commit=True)
+                    if not args.debug_mode:
+                        wandb.log(eval_metrics, step=int(eval_step),commit=True)
                     unlogged_steps = 0
-        
-    wandb_run.finish()
+    
+    if not args.debug_mode:  
+        wandb_run.finish()
 
 train(args)
 #%%
