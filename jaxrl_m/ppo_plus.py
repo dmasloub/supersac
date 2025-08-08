@@ -123,11 +123,18 @@ class SACAgent(flax.struct.PyTreeNode):
     @jax.jit
     def update_actor(agent, batch: Batch, off_policy_batch: Optional[Batch] = None):
         
-        def compute_ess(log_ratios: jnp.ndarray) -> float:
-            ratios = jnp.exp(log_ratios)
-            numerator = (jnp.sum(ratios)) ** 2
-            denominator = jnp.sum(ratios ** 2) * ratios.shape[0]
-            return numerator / denominator
+        def compute_ess(log_ratios: jnp.ndarray, epsilon: float = 1e-8) -> float:
+            """
+            Computes the effective sample size (ESS) from log importance weights.
+            ESS = (sum w)^2 / (sum w^2 * N), where w = exp(log_ratio)
+            """
+            weights = jnp.exp(log_ratios)  # Convert log-weights to raw importance weights
+            sum_w = jnp.sum(weights) # L1
+            sum_w2 = jnp.sum(weights ** 2) # L2
+            N = weights.shape[0]
+
+            ess = (sum_w ** 2) / (sum_w2 * N + epsilon)
+            return jnp.clip(ess, a_min=epsilon, a_max=1.0)  # Ensure safe numerical range
 
 
         def compute_gae(rewards: jnp.ndarray, values: jnp.ndarray, next_values: jnp.ndarray, 
@@ -168,17 +175,12 @@ class SACAgent(flax.struct.PyTreeNode):
                 batch,
                 idx,
                 off_policy_batch=None,
-        ):
-            
-            ### Compute probability of old actions under new policy
-            
-
+        ):            
             batch = jax.tree.map(lambda x:x[idx],batch)
             adv = adv[idx]
             
-            discounts,masks,logp = batch["discounts"],batch["masks"],batch["log_probs"]
+            discounts, masks, logp = batch["discounts"], batch["masks"], batch["log_probs"]
             
-            #jax.debug.print("🤯 HELLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL{x} 🤯", x=discounts[:100])
             dist = agent.actor(batch["observations"],params=actor_params)
             pre_actions = batch["pre_actions"]
             pre_log_probs = dist.log_prob(pre_actions)
@@ -257,54 +259,9 @@ class SACAgent(flax.struct.PyTreeNode):
 
                 # Final combined loss
                 actor_loss = on_loss + off_loss + kl_term
-                jax.debug.print("P3O Actor Loss: {actor_loss}, On Loss: {on_loss}, Off Loss: {off_loss}, KL: {kl_div}, ESS: {c}",
-                                actor_loss=actor_loss, on_loss=on_loss, off_loss=off_loss,
-                                kl_div=kl_div, c=c)
-                # Add extra info to logs
-                info.update({
-                    'actor_loss': actor_loss,
-                    'sp3o_on_loss': on_loss,
-                    'p3o_off_loss': off_loss,
-                    'p3o_kl': kl_div,
-                    'p3o_ess': c,
-                })
             else:
                 raise ValueError(f"Unknown algo: {agent.config['algo']}")
 
-                # # Off-policy log-ratio
-                # off_dist = agent.actor(off_policy_batch["observations"], params=actor_params)
-                # off_logp = off_dist.log_prob(off_policy_batch["pre_actions"])
-
-                # if agent.config["tanh_squash_actions"]:
-                #     off_logp -= jnp.sum(2 * (jnp.log(2) - off_policy_batch["pre_actions"] - jax.nn.softplus(-2 * off_policy_batch["pre_actions"])), axis=-1)
-
-                # log_ratios = off_logp - off_policy_batch["log_probs"]
-                # ratios = jnp.exp(log_ratios)
-
-                # # Compute ESS
-                # c = compute_ess(log_ratios)
-                # lambda_ = 1. - c
-
-                # clipped_ratios = jnp.minimum(ratios, c)
-                # off_adv = off_policy_batch["advantages"]
-                # off_masks = off_policy_batch["masks"]
-
-                # off_loss = -(clipped_ratios * off_adv * off_masks).mean()
-                # kl_div = (ratios * log_ratios).mean()
-                # kl_term = lambda_ * kl_div
-
-                # # Combine on-policy PPO loss with off-policy terms
-                # clip_coef = agent.config["clipping_ratio"]
-                # actor_loss1 = masks * adv * ratio
-                # actor_loss2 = masks * adv * jnp.clip(ratio, 1 - clip_coef, 1 + clip_coef)
-
-                # if agent.config['discount_actor']:
-                #     on_loss = -jnp.minimum(discounts * actor_loss1, discounts * actor_loss2).sum() / discounts.sum()
-                # else:
-                #     on_loss = -jnp.minimum(actor_loss1, actor_loss2).mean()
-
-                # actor_loss = on_loss + off_loss + kl_term
-            
             
             ### Pad Q and logits because actor buffer is padded ###
             logp = masks * new_logp
@@ -345,7 +302,11 @@ class SACAgent(flax.struct.PyTreeNode):
 
         new_rng, curr_key, next_key = jax.random.split(agent.rng, 3)
 
-        observations,next_observations = batch["observations"],batch["next_observations"]
+        if agent.config["algo"] == "p3o":
+            assert off_policy_batch is not None, "P3O requires an off-policy batch"
+            observations, next_observations = off_policy_batch["observations"], off_policy_batch["next_observations"]
+        else:
+            observations,next_observations = batch["observations"],batch["next_observations"]
         
         observations = jnp.concatenate([observations, next_observations[-1][None]], axis=0)
         
@@ -357,21 +318,24 @@ class SACAgent(flax.struct.PyTreeNode):
             
             return v,log_p
         
-        if agent.config['gae_lambda'] > 0.:
-        
-            vs,hs = jax.vmap(evaluate,in_axes=(None,0))(observations,jax.random.split(curr_key,10))
-            
-            tmp_v,tmp_logp = jnp.mean(vs,axis=0),jnp.mean(hs,axis=0)
-            tmp_v -= agent.temp()*tmp_logp
-            v,next_v= tmp_v[:-1],tmp_v[1:]
-            
-            rewards = batch["rewards"]-agent.temp()*batch["log_probs"]
-            dones = jnp.bool(1-batch["masks"])
-            truncations = jnp.bool(batch["truncateds"])
-            
-            adv,_ = compute_gae(rewards.squeeze(),v.squeeze(),next_v.squeeze(),dones.squeeze(),truncations.squeeze(),
-                                gamma=agent.config['discount'],lam=agent.config['gae_lambda'])
-            adv = adv.reshape(-1)
+        if agent.config['gae_lambda'] > 0.:    
+                vs,hs = jax.vmap(evaluate,in_axes=(None,0))(observations,jax.random.split(curr_key,10))
+                
+                tmp_v,tmp_logp = jnp.mean(vs,axis=0),jnp.mean(hs,axis=0)
+                tmp_v -= agent.temp()*tmp_logp
+                v,next_v= tmp_v[:-1],tmp_v[1:]
+                if agent.config["algo"] == "p3o":
+                    rewards = off_policy_batch["rewards"] - agent.temp() * off_policy_batch["log_probs"]
+                    dones = jnp.bool(1-off_policy_batch["masks"])
+                    truncations = jnp.bool(off_policy_batch["truncateds"])
+                else:
+                    rewards = batch["rewards"]-agent.temp()*batch["log_probs"]
+                    dones = jnp.bool(1-batch["masks"])
+                    truncations = jnp.bool(batch["truncateds"])
+                
+                adv,_ = compute_gae(rewards.squeeze(),v.squeeze(),next_v.squeeze(),dones.squeeze(),truncations.squeeze(),
+                                    gamma=agent.config['discount'],lam=agent.config['gae_lambda'])
+                adv = adv.reshape(-1)
 
         else :   
 
@@ -382,7 +346,7 @@ class SACAgent(flax.struct.PyTreeNode):
             adv = (q-agent.temp()*batch["log_probs"]) - (tmp_v - agent.temp() *tmp_logp)### This one worked
             adv = adv.reshape(-1)
             
-        
+        off_policy_batch["advantages"] = adv
         idx = jnp.arange(adv.shape[0])
         if agent.config['store_grads']:
             grads,info = jax.grad(actor_loss_fn,has_aux=True)(agent.actor.params,adv,batch,idx, off_policy_batch)

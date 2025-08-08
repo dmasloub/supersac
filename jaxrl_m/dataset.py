@@ -116,7 +116,7 @@ class ReplayBuffer(Dataset):
     
 class ActorReplayBuffer(ReplayBuffer):
     
-    def get_all(self):
+    def get_all(self) -> dict:
         
         
             batch = jax.tree.map(lambda x: x[:self.size], self._dict)

@@ -58,7 +58,8 @@ parser.add_argument('--max_steps',type=int,default=4_000_000)
 parser.add_argument('--max_episode_steps',type=int,default=1000) 
 parser.add_argument('--gamma',type=float,default=0.99)
 parser.add_argument('--entropy_coeff',type=float,default=1.)
-parser.add_argument('--spo_epsilon',type=float, default=0.25) 
+parser.add_argument('--spo_epsilon',type=float, default=0.25)
+parser.add_argument('--debug_mode', type=str2bool, default=False) 
 
 parser.add_argument('--num_critics',type=int,default=5)
 parser.add_argument('--hidden_dims',type=int,default=256) 
@@ -99,13 +100,6 @@ random.seed(args.seed)
 np.random.seed(args.seed)
 jax_rng = jax.random.PRNGKey(args.seed)
 
-
-
-#jax.config.update("jax_disable_jit", True)
-#config.update("jax_debug_nans", True)
-# config.update("jax_default_matmul_precision", "highest")
-#config.update("jax_log_compiles", True)
-
 def train(args):
     
     
@@ -124,7 +118,10 @@ def train(args):
         'entity': "supersac",
         'hyperparam_dict':args.__dict__,
         }
-    wandb_run = setup_wandb(**wandb_config)
+    if not args.debug_mode:
+        wandb_run = setup_wandb(**wandb_config)
+    else:
+        wandb_run = None
     
     if args.env_name in ["walk","stand","trot","run"]:
         env = DMCGym("dog",args.env_name)
@@ -151,10 +148,10 @@ def train(args):
         log_probs=0.,
     )
 
-    replay_buffer = ReplayBuffer.create(example_transition, size=int(args.buffer_size))
-    actor_buffer = ActorReplayBuffer.create(example_transition, size=args.policy_steps)
+    replay_buffer: ReplayBuffer = ReplayBuffer.create(example_transition, size=int(args.buffer_size))
+    actor_buffer: ActorReplayBuffer = ActorReplayBuffer.create(example_transition, size=args.policy_steps)
 
-    agent = create_learner(args.seed,
+    agent: SACAgent = create_learner(args.seed,
                         
                     algo=args.algo,    
                     observations=example_transition['observations'][None],
@@ -226,9 +223,7 @@ def train(args):
                     actor_batch = actor_buffer.get_all()    
                     
                     if args.algo == "p3o":
-                        off_policy_batch = replay_buffer.sample(jax.random.PRNGKey(i), 1024) # faster than get_all()
-
-                        jax.debug.breakpoint()
+                        off_policy_batch = replay_buffer.get_all() # TODO: consider the sample size
                         agent, actor_update_info = agent.update_actor(actor_batch, off_policy_batch)
                     else:
                         agent, actor_update_info = agent.update_actor(actor_batch)    
