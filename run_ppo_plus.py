@@ -36,7 +36,7 @@ from dm_control import suite
 
 
 # Set env variables
-os.environ["WANDB_API_KEY"]="28996bd59f1ba2c5a8c3f2cc23d8673c327ae230"
+os.environ["WANDB_API_KEY"]="7a792f0991f824c320035120180ba48920981e67"
 os.environ["WANDB__SERVICE_WAIT"] = str(1800)
 os.environ['PYTHONHASHSEED'] = '1'
 os.environ['TF_CUDNN_DETERMINISTIC'] = '1'
@@ -80,6 +80,9 @@ parser.add_argument('--use_layer_norm',type=str2bool,default=True)
 parser.add_argument('--clipping_ratio',type=float,default=0.25) 
 parser.add_argument('--gae_lambda',type=float,default=0.) 
 
+parser.add_argument('--policy_bank_size', type=int, default=5)
+
+
 parser.add_argument('--episode_based',type=str2bool,default=False) 
 parser.add_argument('--minibatch',type=str2bool,default=False) 
 parser.add_argument('--buffer_size',type=int,default=50_000) 
@@ -116,7 +119,8 @@ jax.config.update("jax_default_matmul_precision", "highest")
 
 def train(args):
     
-    
+    policy_bank = deque(maxlen=args.policy_bank_size)
+    policy_id = 0
         
     if args.env_name in ["Humanoid-v5","HumanoidStandup-v5","walk","stand","trot","run"]: args.max_steps = 5_000_000
     elif args.env_name == "InvertedDoublePendulum-v5": args.max_steps = 500_000
@@ -128,7 +132,7 @@ def train(args):
 
     wandb_config = {
         'project': args.project_name,
-        'name':None,
+        'name':f"{args.algo_name}_{args.env_name}_{args.seed}",
         'hyperparam_dict':args.__dict__,
         }
     wandb_run = setup_wandb(**wandb_config)
@@ -156,6 +160,7 @@ def train(args):
         pre_actions = env.action_space.sample(),
         discounts=1.0,
         log_probs=0.,
+        policy_id=0, 
     )
 
     replay_buffer = ReplayBuffer.create(example_transition, size=int(args.buffer_size))
@@ -207,10 +212,14 @@ def train(args):
                 
                 logging.debug('policy rollout')
                 if args.on_policy_data: replay_buffer = replay_buffer.reset()
+                
+                policy_bank.append((policy_id, deepcopy(agent.actor.params)))
+                
                 replay_buffer,actor_buffer,policy_return,undisc_policy_return,num_steps = rollout_fn(
-                                                                        agent,env,exploration_rng,
+                                                                        agent,env,exploration_rng,policy_id,
                                                                         replay_buffer,actor_buffer,eval=False,
-                                                                        discount = args.gamma,max_steps=args.policy_steps)
+                                                                        discount = args.gamma,max_steps=args.policy_steps, 
+                                                                        )
                          
                 
                 unlogged_steps += num_steps
@@ -240,6 +249,8 @@ def train(args):
                     #agent, actor_update_info = agent.update_actor(actor_batch)    
                     agent,actor_update_info = agent.update_actor_seq(actor_batch)
                     critic_update_info = {}
+                
+                policy_id += 1
                 
                 update_info = {**critic_update_info, **actor_update_info}
                 agent = agent.replace(old_actor_params=deepcopy(agent.actor.params),old_temp_params=deepcopy(agent.temp.params))

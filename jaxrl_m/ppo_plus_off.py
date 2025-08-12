@@ -204,18 +204,36 @@ class SACAgent(flax.struct.PyTreeNode):
         
             pre_actions = batch["pre_actions"]
             
+            dist_new = agent.actor(batch["observations"], params=actor_params)
+            new_pre_log_probs = dist_new.log_prob(pre_actions)
+            
+            tanh_corr = jnp.sum(2 * (jnp.log(2) - pre_actions - jax.nn.softplus(-2 * pre_actions)), axis=-1)
+            new_logp = new_pre_log_probs - tanh_corr
+            
+            mu_logp = batch["log_probs"] 
+            
+            dist_k = agent.actor(batch["observations"], params=agent.old_actor_params)
+            k_pre_logp = dist_k.log_prob(pre_actions)
+            k_logp = k_pre_logp - tanh_corr
+            
+            log_r = new_logp - mu_logp
+            log_c = k_logp   - mu_logp
+            ratio = jnp.exp(log_r)
+            center = jnp.exp(log_c)
+            
+            
             ############### METHOD 2 ###############
         
-            dist = agent.actor(batch["observations"],params=actor_params)
-            new_pre_log_probs = dist.log_prob(pre_actions)
-            new_logp = new_pre_log_probs - jnp.sum(2 * (jnp.log(2) - pre_actions - jax.nn.softplus(-2 * pre_actions)), axis=-1)
+            #dist = agent.actor(batch["observations"],params=actor_params)
+            #new_pre_log_probs = dist.log_prob(pre_actions)
+            #new_logp = new_pre_log_probs - jnp.sum(2 * (jnp.log(2) - pre_actions - jax.nn.softplus(-2 * pre_actions)), axis=-1)
             
      
             
-            dist = agent.actor(batch["observations"],params=agent.old_actor_params)            
-            old_pre_log_probs = dist.log_prob(pre_actions)
-            logp = old_pre_log_probs - jnp.sum(2 * (jnp.log(2) - pre_actions - jax.nn.softplus(-2 * pre_actions)), axis=-1)            
-            logratio = new_pre_log_probs - old_pre_log_probs
+            #dist = agent.actor(batch["observations"],params=agent.old_actor_params)            
+            #old_pre_log_probs = dist.log_prob(pre_actions)
+            #logp = old_pre_log_probs - jnp.sum(2 * (jnp.log(2) - pre_actions - jax.nn.softplus(-2 * pre_actions)), axis=-1)            
+            #logratio = new_pre_log_probs - old_pre_log_probs
             
             
             
@@ -241,33 +259,42 @@ class SACAgent(flax.struct.PyTreeNode):
             # logratio = new_logp - batch["log_probs"]
             #######################################
             
-            ratio = jnp.exp(logratio)
+            #ratio = jnp.exp(logratio)
             
             
          
          
             # Calculate how much policy is changing
-            approx_kl = ((ratio - 1) - logratio).mean()
+            #approx_kl = ((ratio - 1) - logratio).mean()
 
             # Policy loss
-            clip_coef = agent.config["clipping_ratio"] ##default 0.2 
-            masks = batch["masks"]
-            outliers = (ratio > 1 + 2 * clip_coef) | (ratio < 1 - 2 * clip_coef)
+            eps = agent.config["clipping_ratio"] ##default 0.2 
+            
+            outliers = (ratio > center + 2 * eps) | (ratio < jnp.maximum(center - 2 * eps, 0.0))
+            
+            #masks = batch["masks"]
+            #outliers = (ratio > 1 + 2 * clip_coef) | (ratio < 1 - 2 * clip_coef)
             # actor_loss1 = masks*adv * ratio
             # actor_loss2 = masks*adv * jnp.clip(ratio, 1 - clip_coef, 1 + clip_coef)
             # actor_loss = -jnp.minimum(actor_loss1,actor_loss2).mean()
             
             
             #actor_loss_spo_terms = batch["masks"] * adv * ratio - (jnp.abs(batch["masks"] * adv) / (2 * agent.config["clipping_ratio"])) * (ratio - 1)**2
-            actor_loss_spo_terms = (1.-outliers)* batch["masks"] * adv * ratio - (jnp.abs(batch["masks"] * adv) / (2 * agent.config["clipping_ratio"])) * (ratio - 1)**2
-            actor_loss = -actor_loss_spo_terms.mean()
+            #actor_loss_spo_terms = (1.-outliers)* batch["masks"] * adv * ratio - (jnp.abs(batch["masks"] * adv) / (2 * agent.config["clipping_ratio"])) * (ratio - 1)**2
+            #actor_loss = -actor_loss_spo_terms.mean()
             
+            actor_gain = (1.0 - outliers) * (batch["masks"] * adv) * ratio
+            actor_quad = (jnp.abs(batch["masks"] * adv) / (2.0 * eps)) * (ratio - center) ** 2
+            actor_loss = -(actor_gain - actor_quad).mean()
             
                     
             ### Pad Q and logits because actor buffer is padded ###
-            logp = masks * new_logp
+            #logp = masks * new_logp
             
-            entropy = -1 * (masks*logp).sum()/(masks.sum())
+            ratio_k = jnp.exp(new_logp - k_logp)
+            approx_kl = ((ratio_k - 1.0) - jnp.log(ratio_k)).mean() 
+            
+            entropy = -1 * (batch["masks"]*new_logp).sum()/(batch["masks"].sum())
             
             return actor_loss, {
                 'actor_loss': actor_loss,
@@ -275,7 +302,7 @@ class SACAgent(flax.struct.PyTreeNode):
                 'approx_kl':approx_kl,
                 'max_ratio':jnp.max(ratio),
                 'min_ratio':jnp.min(ratio),
-                'percent_outliers': jnp.mean((ratio > 1 + 2 * clip_coef) | (ratio < 1 - 2 * clip_coef)),
+                'percent_outliers': jnp.mean(outliers),
               
             }
             

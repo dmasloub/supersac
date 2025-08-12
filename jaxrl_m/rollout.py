@@ -4,7 +4,7 @@ import chex
 import numpy as np 
 import jax.numpy as jnp
 
-def rollout_policy(agent,env,exploration_rng,
+def rollout_policy(agent,env,exploration_rng,policy_id=0,
                    replay_buffer=None,actor_buffer=None,
                    eval=False,discount=0.99,max_rollouts=10):
     
@@ -36,7 +36,7 @@ def rollout_policy(agent,env,exploration_rng,
 
         transition = dict(observations=obs,actions=action,
             rewards=reward,masks=mask,truncateds=truncated,next_observations=next_obs,discounts=disc,
-            log_probs=log_p,pre_actions=pre_action)
+            log_probs=log_p,pre_actions=pre_action,policy_id=policy_id,)
 
         if replay_buffer is not None:
             replay_buffer.add_transition(transition)
@@ -64,7 +64,7 @@ def rollout_policy(agent,env,exploration_rng,
 
 
 
-def rollout_policy2(agent,env,exploration_rng,
+def rollout_policy2(agent,env,exploration_rng,policy_id=0,
                    replay_buffer=None,actor_buffer=None,
                    eval=False,discount=0.99,max_steps=5120):
     
@@ -96,9 +96,14 @@ def rollout_policy2(agent,env,exploration_rng,
         
         mask = float(not done)
 
-        transition = dict(observations=obs,actions=action,
-            rewards=reward,masks=mask,truncateds=truncated,next_observations=next_obs,discounts=disc,
-            log_probs=log_p,pre_actions=pre_action)
+        transition = dict(
+            observations=obs, actions=action,
+            rewards=reward, masks=mask, truncateds=truncated,
+            next_observations=next_obs, discounts=disc,
+            log_probs=log_p,
+            pre_actions=pre_action,
+            policy_id=policy_id,
+        )
 
         if replay_buffer is not None:
             replay_buffer.add_transition(transition)
