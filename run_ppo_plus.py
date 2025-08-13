@@ -82,6 +82,7 @@ parser.add_argument('--clipping_ratio',type=float,default=0.25)
 parser.add_argument('--gae_lambda',type=float,default=0.) 
 
 parser.add_argument('--policy_bank_size', type=int, default=5)
+parser.add_argument('--alpha_filter', type=float, default=0.7)
 
 
 parser.add_argument('--episode_based',type=str2bool,default=False) 
@@ -246,7 +247,7 @@ def train(args):
                     #actor_batch = actor_buffer.get_all()
                     
                     actor_transitions_full = replay_buffer.get_all()
-                    allowed = select_allowed_policies(agent, actor_transitions_full, policy_id, alpha_log=0.7)
+                    allowed = select_allowed_policies(agent, actor_transitions_full, policy_id, alpha_log=args.alpha_filter)
                     mask = np.isin(np.asarray(actor_transitions_full['policy_id']), list(allowed))
                     filtered = jax.tree.map(lambda x: x[mask], actor_transitions_full)
                     
