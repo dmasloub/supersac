@@ -16,6 +16,7 @@ import jax
 import numpy as np
 import tqdm
 import wandb
+import flax
 from jax import config
 
 from jaxrl_m.dataset import ActorReplayBuffer, ReplayBuffer
@@ -93,7 +94,7 @@ parser.add_argument('--num_actor_updates',type=int,default=1)
 parser.add_argument('--activation_fn',type=str,default='silu')
 parser.add_argument('--stable_scheme',type=str2bool,default=True)
 parser.add_argument('--bound_actions',type=str2bool,default=True)
-parser.add_argument('--optimizer',type=str,default='sgd', choices=['adam', 'sgd'])
+parser.add_argument('--optimizer',type=str,default='adam', choices=['adam', 'sgd'])
 
 args = parser.parse_args()
 print(args)
@@ -244,10 +245,19 @@ def train(args):
                     #if args.on_policy_data:
                     #actor_batch = actor_buffer.get_all()
                     
-                    actor_batch = replay_buffer.get_all()
+                    actor_transitions_full = replay_buffer.get_all()
+                    balanced_actor_transitions = make_balanced_recent(
+                        actor_transitions_full,
+                        current_policy_id=policy_id,
+                        M=args.policy_bank_size,  
+                        min_total=250             
+                    )
                     
                     #agent, actor_update_info = agent.update_actor(actor_batch)    
-                    agent,actor_update_info = agent.update_actor_seq(actor_batch)
+                    agent = agent.replace(
+                        config=flax.core.FrozenDict({**agent.config, 'current_policy_id': policy_id})
+                    )
+                    agent,actor_update_info = agent.update_actor_seq(balanced_actor_transitions)
                     critic_update_info = {}
                 
                 policy_id += 1

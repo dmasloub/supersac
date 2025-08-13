@@ -5,6 +5,8 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 
+import numpy as np
+
 
 def str2bool(v):
     if isinstance(v, bool):
@@ -138,3 +140,29 @@ def measure_action_distance(agent,new_params,old_params,observations):
     a_old = agent.actor(observations,params=old_params)
     
     return jnp.linalg.norm(a_new-a_old,axis=-1).mean()
+
+
+def make_balanced_recent(transitions, current_policy_id: int, M: int, min_total: int = 250):
+    pids = np.asarray(transitions['policy_id'])
+
+    recent_ids = np.arange(max(0, current_policy_id - (M - 1)), current_policy_id + 1)
+
+    
+    buckets = [np.where(pids == rid)[0] for rid in recent_ids]
+    buckets = [b for b in buckets if b.size > 0]
+    if not buckets:  
+        return transitions
+
+    per_id = min(len(b) for b in buckets)
+    total = per_id * len(buckets)
+    if total < min_total:
+        per_id = int(np.ceil(min_total / len(buckets)))
+
+    inds = np.concatenate([
+        np.random.choice(b, size=per_id, replace=(len(b) < per_id))
+        for b in buckets
+    ])
+    np.random.shuffle(inds)
+
+    jinds = jnp.asarray(inds, dtype=jnp.int32)
+    return jax.tree.map(lambda x: x[jinds], transitions)

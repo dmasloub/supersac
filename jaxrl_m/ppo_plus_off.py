@@ -161,7 +161,8 @@ class SACAgent(flax.struct.PyTreeNode):
             'temperature': 0.0,
             'max_ratio':0.0,
             'min_ratio':0.0,
-            'percent_outliers':0.0,
+            'mean_abs_r_minus_c': 0.0,
+            'mean_reuse_depth': 0.0,
             
         }
         initial_carry = (agent, dummy_info)  # (agent, dummy_info)
@@ -220,8 +221,16 @@ class SACAgent(flax.struct.PyTreeNode):
             log_c = k_logp   - mu_logp
             ratio = jnp.exp(log_r)
             center = jnp.exp(log_c)
+
+            #adv_mean = jnp.mean(adv)
+            #adv_std  = jnp.std(adv) + 1e-8
+            #adv_norm = (adv - adv_mean) / adv_std
             
+            i = (agent.config['current_policy_id'] - batch['policy_id']).astype(jnp.float32)
+            i = jnp.maximum(i, 0.0)
             
+            eps_base = agent.config["clipping_ratio"]
+            eps_i = jnp.full_like(i, eps_base)
             ############### METHOD 2 ###############
         
             #dist = agent.actor(batch["observations"],params=actor_params)
@@ -268,9 +277,9 @@ class SACAgent(flax.struct.PyTreeNode):
             #approx_kl = ((ratio - 1) - logratio).mean()
 
             # Policy loss
-            eps = agent.config["clipping_ratio"] ##default 0.2 
+            #eps = agent.config["clipping_ratio"] ##default 0.2 
             
-            outliers = (ratio > center + 2 * eps) | (ratio < jnp.maximum(center - 2 * eps, 0.0))
+            #outliers = (ratio > center + 2 * eps) | (ratio < jnp.maximum(center - 2 * eps, 0.0))
             
             #masks = batch["masks"]
             #outliers = (ratio > 1 + 2 * clip_coef) | (ratio < 1 - 2 * clip_coef)
@@ -283,9 +292,13 @@ class SACAgent(flax.struct.PyTreeNode):
             #actor_loss_spo_terms = (1.-outliers)* batch["masks"] * adv * ratio - (jnp.abs(batch["masks"] * adv) / (2 * agent.config["clipping_ratio"])) * (ratio - 1)**2
             #actor_loss = -actor_loss_spo_terms.mean()
             
-            actor_gain = (1.0 - outliers) * (batch["masks"] * adv) * ratio
-            actor_quad = (jnp.abs(batch["masks"] * adv) / (2.0 * eps)) * (ratio - center) ** 2
-            actor_loss = -(actor_gain - actor_quad).mean()
+            #actor_gain = (1.0 - outliers) * (batch["masks"] * adv) * ratio
+            #actor_quad = (jnp.abs(batch["masks"] * adv) / (2.0 * eps)) * (ratio - center) ** 2
+            #actor_loss = -(actor_gain - actor_quad).mean()
+            
+            gain = (batch["masks"] * adv) * ratio
+            quad = (jnp.abs(batch["masks"] * adv) / (2.0 * eps_i)) * jnp.square(ratio - center)
+            actor_loss = -(gain - quad).mean()
             
                     
             ### Pad Q and logits because actor buffer is padded ###
@@ -302,8 +315,8 @@ class SACAgent(flax.struct.PyTreeNode):
                 'approx_kl':approx_kl,
                 'max_ratio':jnp.max(ratio),
                 'min_ratio':jnp.min(ratio),
-                'percent_outliers': jnp.mean(outliers),
-              
+                'mean_abs_r_minus_c': jnp.mean(jnp.abs(ratio - center)), 
+                'mean_reuse_depth': jnp.mean(i),
             }
             
         
