@@ -251,20 +251,23 @@ def train(args):
                     mask = np.isin(np.asarray(actor_transitions_full['policy_id']), list(allowed))
                     filtered = jax.tree.map(lambda x: x[mask], actor_transitions_full)
                     
-                    balanced_actor_transitions = make_balanced_recent(
+                    rng_bal, agent_rng_next = jax.random.split(agent.rng)
+                    balanced_actor_transitions = make_balanced_recent_jax(
                         filtered,
                         current_policy_id=policy_id,
-                        M=args.policy_bank_size,  
-                        min_total=250             
+                        M=args.policy_bank_size,
+                        min_total=250,
+                        key=rng_bal,
                     )
-                    
+                    agent = agent.replace(rng=agent_rng_next)
                     #agent, actor_update_info = agent.update_actor(actor_batch)    
                     
                     M_eff = min(args.policy_bank_size, len(allowed))
                     eps_eff = args.clipping_ratio * (4.0 / (M_eff + 4.0))
-                    agent = agent.replace(
-                        config=flax.core.FrozenDict({**agent.config, 'current_policy_id': policy_id, 'clipping_ratio': eps_eff})
-                    )
+                    balanced_actor_transitions = add_meta(balanced_actor_transitions, policy_id, eps_eff)
+                    # agent = agent.replace(
+                    #     config=flax.core.FrozenDict({**agent.config, 'current_policy_id': policy_id, 'clipping_ratio': eps_eff})
+                    # )
                     agent,actor_update_info = agent.update_actor_seq(balanced_actor_transitions)
                     critic_update_info = {}
                 

@@ -142,30 +142,57 @@ def measure_action_distance(agent,new_params,old_params,observations):
     return jnp.linalg.norm(a_new-a_old,axis=-1).mean()
 
 
-def make_balanced_recent(transitions, current_policy_id: int, M: int, min_total: int = 250):
-    pids = np.asarray(transitions['policy_id'])
+def make_balanced_recent_jax(transitions,
+                             current_policy_id: int,
+                             M: int,
+                             min_total: int = 250,
+                             key=None):
+    if key is None:
+        key = jax.random.PRNGKey(0)
 
-    recent_ids = np.arange(max(0, current_policy_id - (M - 1)), current_policy_id + 1)
+    pids = transitions['policy_id']              
+    N = pids.shape[0]
 
+    start_pid = max(0, current_policy_id - (M - 1))
+    recent_ids_py = np.arange(start_pid, current_policy_id + 1, dtype=np.int32)
+
+    counts = jax.vmap(lambda rid: (pids == rid).sum())(jnp.asarray(recent_ids_py))
+    counts_py = np.asarray(counts)               
+
+
+    present_mask = counts_py > 0
+    if not present_mask.any():
+        return transitions                      
+
+    present_ids_py = recent_ids_py[present_mask]
+    counts_present = counts_py[present_mask]
+    B_eff = int(present_ids_py.shape[0])
     
-    buckets = [np.where(pids == rid)[0] for rid in recent_ids]
-    buckets = [b for b in buckets if b.size > 0]
-    if not buckets:  
-        return transitions
+    per_id0 = int(counts_present.min())                         
+    if per_id0 * B_eff < min_total:
+        per_id = int(np.ceil(min_total / B_eff))
+    else:
+        per_id = per_id0
 
-    per_id = min(len(b) for b in buckets)
-    total = per_id * len(buckets)
-    if total < min_total:
-        per_id = int(np.ceil(min_total / len(buckets)))
+    keys = jax.random.split(key, B_eff)
+    present_ids = jnp.asarray(present_ids_py, dtype=pids.dtype)
 
-    inds = np.concatenate([
-        np.random.choice(b, size=per_id, replace=(len(b) < per_id))
-        for b in buckets
-    ])
-    np.random.shuffle(inds)
+    def sample_one(rid, k):
+        mask  = (pids == rid)
+        count = mask.sum()
+        prob  = jnp.where(mask, 1.0, 0.0)
+        prob  = prob / jnp.maximum(count.astype(prob.dtype), 1.0)
 
-    jinds = jnp.asarray(inds, dtype=jnp.int32)
-    return jax.tree.map(lambda x: x[jinds], transitions)
+        def with_replacement(k_):
+            return jax.random.choice(k_, a=N, shape=(per_id,), p=prob, replace=True)
+        def without_replacement(k_):
+            return jax.random.choice(k_, a=N, shape=(per_id,), p=prob, replace=False)
+
+        return jax.lax.cond(count < per_id, with_replacement, without_replacement, k)
+
+    idxs = jax.vmap(sample_one)(present_ids, keys).reshape(-1)   
+    return jax.tree.map(lambda x: x[idxs], transitions)
+
 
 
 def select_allowed_policies(agent, transitions, current_pid, alpha_log=0.7):
@@ -192,3 +219,12 @@ def select_allowed_policies(agent, transitions, current_pid, alpha_log=0.7):
             if med <= alpha_log:
                 allowed.add(int(pid))
     return allowed
+
+
+def add_meta(transitions, current_pid: int, eps_base: float):
+    n = transitions['observations'].shape[0]
+    return {
+        **transitions,
+        'current_policy_id': jnp.full((n,), current_pid, dtype=jnp.int32),
+        'eps_base': jnp.full((n,), eps_base, dtype=transitions['rewards'].dtype),
+    }

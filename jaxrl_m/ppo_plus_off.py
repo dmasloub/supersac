@@ -226,11 +226,10 @@ class SACAgent(flax.struct.PyTreeNode):
             #adv_std  = jnp.std(adv) + 1e-8
             #adv_norm = (adv - adv_mean) / adv_std
             
-            i = (agent.config['current_policy_id'] - batch['policy_id']).astype(jnp.float32)
+            i = (batch['current_policy_id'] - batch['policy_id']).astype(jnp.float32)
             i = jnp.maximum(i, 0.0)
             
-            eps_base = agent.config["clipping_ratio"]
-            eps_i = jnp.full_like(i, eps_base)
+            eps_i = batch['eps_base'] 
             ############### METHOD 2 ###############
         
             #dist = agent.actor(batch["observations"],params=actor_params)
@@ -320,7 +319,7 @@ class SACAgent(flax.struct.PyTreeNode):
             }
             
         
-        def temp_loss_fn(temp_params, entropy, target_entropy):
+        def temp_loss_fn(temp_params, entropy, target_entropy, clip_coeff):
             """
             Calculates temperature loss but forces the loss to 0 if the new
             temperature is outside the allowed ratio of the old temperature.
@@ -338,8 +337,8 @@ class SACAgent(flax.struct.PyTreeNode):
             temp_ratio = new_temperature / (old_temperature + 1e-8)
             
             # 2. Define the allowed range and the condition
-            min_ratio = 1.0 - clip_coef
-            max_ratio = 1.0 + clip_coef
+            min_ratio = 1.0 - clip_coeff
+            max_ratio = 1.0 + clip_coeff
             is_within_bounds = (temp_ratio >= min_ratio) & (temp_ratio <= max_ratio)
             
             # 3. Calculate the standard loss
@@ -401,7 +400,8 @@ class SACAgent(flax.struct.PyTreeNode):
         new_actor, actor_info = agent.actor.apply_loss_fn(actor_loss_fn,True,adv,batch)#adv
         
         entropy_pi = -tmp_logp.mean()
-        new_temp, temp_info = agent.temp.apply_loss_fn(temp_loss_fn,True,entropy_pi,agent.config['target_entropy'])
+        clip_coeff  = jnp.mean(batch['eps_base'])
+        new_temp, temp_info = agent.temp.apply_loss_fn(temp_loss_fn,True,entropy_pi,agent.config['target_entropy'], clip_coeff)
         #new_temp,temp_info = agent.temp,{"temp_loss":0.0,"temperature":agent.temp()}
         
         agent = agent.replace(rng=new_rng, actor=new_actor,temp=new_temp)
