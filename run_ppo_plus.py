@@ -54,7 +54,7 @@ parser = argparse.ArgumentParser()
 
 parser.add_argument('--seed',type=int,default=21) 
 
-parser.add_argument('--algo_name', type=str, default='superppo', help='the name of the RL algorithm')
+parser.add_argument('--algo_name', type=str, default='PPOext', help='the name of the RL algorithm')
 parser.add_argument('--project_name',type=str,default="single_exp") 
 parser.add_argument('--env_name',type=str,default="Walker2d-v5") 
 parser.add_argument('--max_steps',type=int,default=1_000_000) 
@@ -246,16 +246,23 @@ def train(args):
                     #actor_batch = actor_buffer.get_all()
                     
                     actor_transitions_full = replay_buffer.get_all()
+                    allowed = select_allowed_policies(agent, actor_transitions_full, policy_id, alpha_log=0.7)
+                    mask = np.isin(np.asarray(actor_transitions_full['policy_id']), list(allowed))
+                    filtered = jax.tree.map(lambda x: x[mask], actor_transitions_full)
+                    
                     balanced_actor_transitions = make_balanced_recent(
-                        actor_transitions_full,
+                        filtered,
                         current_policy_id=policy_id,
                         M=args.policy_bank_size,  
                         min_total=250             
                     )
                     
                     #agent, actor_update_info = agent.update_actor(actor_batch)    
+                    
+                    M_eff = min(args.policy_bank_size, len(allowed))
+                    eps_eff = args.clipping_ratio * (4.0 / (M_eff + 4.0))
                     agent = agent.replace(
-                        config=flax.core.FrozenDict({**agent.config, 'current_policy_id': policy_id})
+                        config=flax.core.FrozenDict({**agent.config, 'current_policy_id': policy_id, 'clipping_ratio': eps_eff})
                     )
                     agent,actor_update_info = agent.update_actor_seq(balanced_actor_transitions)
                     critic_update_info = {}
