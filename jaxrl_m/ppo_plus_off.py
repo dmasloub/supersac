@@ -399,7 +399,9 @@ class SACAgent(flax.struct.PyTreeNode):
         
 
         new_actor, actor_info = agent.actor.apply_loss_fn(actor_loss_fn,True,adv,batch)#adv
-        new_temp, temp_info = agent.temp.apply_loss_fn(temp_loss_fn,True,actor_info['entropy'],agent.config['target_entropy'])
+        
+        entropy_pi = -tmp_logp.mean()
+        new_temp, temp_info = agent.temp.apply_loss_fn(temp_loss_fn,True,entropy_pi,agent.config['target_entropy'])
         #new_temp,temp_info = agent.temp,{"temp_loss":0.0,"temperature":agent.temp()}
         
         agent = agent.replace(rng=new_rng, actor=new_actor,temp=new_temp)
