@@ -214,7 +214,7 @@ def train(args):
                 logging.debug('policy rollout')
                 if args.on_policy_data: replay_buffer = replay_buffer.reset()
                 
-                policy_bank.append((policy_id, deepcopy(agent.actor.params)))
+                policy_bank.append((policy_id, agent.actor.params))
                 
                 replay_buffer,actor_buffer,policy_return,undisc_policy_return,num_steps = rollout_fn(
                                                                         agent,env,exploration_rng,policy_id,
@@ -270,16 +270,21 @@ def train(args):
                 policy_id += 1
                 
                 update_info = {**critic_update_info, **actor_update_info}
-                agent = agent.replace(old_actor_params=deepcopy(agent.actor.params),old_temp_params=deepcopy(agent.temp.params))
+                agent = agent.replace(old_actor_params=agent.actor.params,old_temp_params=agent.temp.params)
                 
                 ### Log training info ###
                 exploration_metrics = {f'exploration/disc_return': policy_return}
                 train_metrics = {f'training/{k}': v for k, v in update_info.items()}
                 train_metrics['training/undisc_return'] = undisc_policy_return
                 
-                wandb.log(train_metrics, step=int(i),commit=False)
-                wandb.log(exploration_metrics, step=int(i),commit=False)
-            
+                #wandb.log(train_metrics, step=int(i),commit=False)
+                #wandb.log(exploration_metrics, step=int(i),commit=False)
+
+                payload = {}
+                payload.update(train_metrics)
+                payload.update(exploration_metrics)
+                wandb.log(payload, step=int(i), commit=False)
+                
                 ### Log evaluation info ###
                 
                 if unlogged_steps >= log_interval:

@@ -169,25 +169,26 @@ def make_balanced_recent(transitions, current_policy_id: int, M: int, min_total:
 
 
 def select_allowed_policies(agent, transitions, current_pid, alpha_log=0.7):
-    
     pids = np.asarray(transitions['policy_id'])
     uniq = np.unique(pids)
-    allowed = []
+    
+    obs  = jax.device_get(transitions['observations'])
+    prea = jax.device_get(transitions['pre_actions'])
+    mu_logp = np.asarray(transitions['log_probs'])
+
+    dist_k   = agent.actor.apply_fn({'params': agent.actor.params}, obs)
+    k_pre_lp = np.asarray(dist_k.log_prob(prea))
+    
+    tanh_corr = np.sum(2*(np.log(2) - prea - np.log1p(np.exp(-2*prea))), axis=-1)
+    k_logp = k_pre_lp - tanh_corr
+
+    d = np.abs(k_logp - mu_logp)
+
+    allowed = set([int(current_pid)])
     for pid in uniq:
-        idx = np.where(pids == pid)[0]
-        
-        mu_logp = np.asarray(transitions['log_probs'])[idx]
-
-        
-        obs = jax.device_get(transitions['observations'][idx])
-        pre_a = jax.device_get(transitions['pre_actions'][idx])
-        dist_k = agent.actor.apply_fn({'params': agent.actor.params}, obs)
-        k_pre_logp = np.asarray(dist_k.log_prob(pre_a))
-        tanh_corr = np.sum(2*(np.log(2) - pre_a - np.log1p(np.exp(-2*pre_a))), axis=-1)
-        k_logp = k_pre_logp - tanh_corr
-
-        d = np.median(np.abs(k_logp - mu_logp))
-
-        if d <= alpha_log or pid == current_pid:
-            allowed.append(pid)
-    return set(allowed)
+        idx = (pids == pid)
+        if idx.any():
+            med = np.median(d[idx])  
+            if med <= alpha_log:
+                allowed.add(int(pid))
+    return allowed

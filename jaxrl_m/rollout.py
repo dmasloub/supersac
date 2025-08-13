@@ -64,71 +64,72 @@ def rollout_policy(agent,env,exploration_rng,policy_id=0,
 
 
 
-def rollout_policy2(agent,env,exploration_rng,policy_id=0,
-                   replay_buffer=None,actor_buffer=None,
-                   eval=False,discount=0.99,max_steps=5120):
-    
-    
+def rollout_policy2(agent, env, exploration_rng, policy_id=0,
+                    replay_buffer=None, actor_buffer=None,
+                    eval=False, discount=0.99, max_steps=5120):
+
+    traj = {k: [] for k in ("observations","actions","rewards","masks",
+                            "truncateds","next_observations","discounts",
+                            "log_probs","pre_actions","policy_id")}
 
     n_steps,n_rollouts,disc,mask = 0,0,1.,1.
     policy_returns,undisc_returns = [],[]
     policy_return,undisc_return = 0.,0.
-    
-    if actor_buffer is not None: actor_buffer = actor_buffer.reset()
-    
-    obs,_ = env.reset()  
-    
+
+    if actor_buffer is not None:
+        actor_buffer = actor_buffer.reset()
+
+    obs, _ = env.reset()
+
     while n_steps < max_steps:
-        
-        if eval:            
+        if eval:
             action = agent.deterministic_action(obs)
-            log_p,pre_action = 0.,action
+            log_p, pre_action = 0., action
         else:
             exploration_rng, key = jax.random.split(exploration_rng)
-            action,log_p,pre_action = agent.sample_actions(obs,seed=exploration_rng)
-            
+            action, log_p, pre_action = agent.sample_actions(obs, seed=exploration_rng)
+
         action = np.array(action)
         next_obs, reward, done, truncated, info = env.step(action)
 
-    
         policy_return += reward * disc
         undisc_return += reward
-        
         mask = float(not done)
 
         transition = dict(
             observations=obs, actions=action,
             rewards=reward, masks=mask, truncateds=truncated,
             next_observations=next_obs, discounts=disc,
-            log_probs=log_p,
-            pre_actions=pre_action,
+            log_probs=log_p, pre_actions=pre_action,
             policy_id=policy_id,
         )
+        for k, v in transition.items():
+            traj[k].append(v)
 
-        if replay_buffer is not None:
-            replay_buffer.add_transition(transition)
-        
-        if actor_buffer is not None:
-            actor_buffer.add_transition(transition)
-    
         obs = next_obs
-        disc *= (discount*mask)
+        disc *= (discount * mask)
         n_steps += 1
-        
-        if (done or truncated) :
+
+        if (done or truncated):
             policy_returns.append(policy_return)
             undisc_returns.append(undisc_return)
             policy_return = 0.
             undisc_return = 0.
-            obs,_= env.reset()
-            disc,mask = 1.,1.
-            n_rollouts+=1
-            
+            obs, _ = env.reset()
+            disc, mask = 1., 1.
+            n_rollouts += 1
+
+    if replay_buffer is not None:
+        batch = {k: np.asarray(v) for k, v in traj.items()}
+        replay_buffer.add_transitions_batch(batch)
+    if actor_buffer is not None:
+        batch = {k: np.asarray(v) for k, v in traj.items()}
+        actor_buffer.add_transitions_batch(batch)
+
     policy_return = np.array(policy_returns).mean()
     undisc_return = np.array(undisc_returns).mean()
-    
-  
-    return replay_buffer,actor_buffer,policy_return,undisc_return,n_steps
+    return replay_buffer, actor_buffer, policy_return, undisc_return, n_steps
+
 
 
 

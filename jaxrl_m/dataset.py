@@ -103,6 +103,20 @@ class ReplayBuffer(Dataset):
         self.pointer = (self.pointer + 1) % self.max_size
         self.size = max(self.pointer, self.size)
     
+    def add_transitions_batch(self, batch):
+        B = get_size(batch)
+        first = min(B, self.max_size - self.pointer)
+        second = B - first
+
+        def write_slice(buf, arr):
+            buf[self.pointer:self.pointer+first] = arr[:first]
+            if second > 0:
+                buf[0:second] = arr[first:first+second]
+
+        jax.tree.map(write_slice, self._dict, batch)
+        self.pointer = (self.pointer + B) % self.max_size
+        self.size = min(self.size + B, self.max_size)
+    
     def get_all(self):
         
         batch = jax.tree.map(lambda x: x[:self.size], self._dict)
